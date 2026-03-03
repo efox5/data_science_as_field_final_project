@@ -1,0 +1,279 @@
+---
+title: "NYPD Shooting Incident Data Report"
+date: "2026-02-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Libraries used in this project
+```{r load_libraries, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(readr)
+```
+
+
+## Load data
+```{r load_data, message=FALSE, warning=FALSE}
+
+# Load shootings data
+# The suggested data online isn't available, but this data was found and seems similar.
+shootings_data <- readr::read_csv(
+ "https://data.cityofnewyork.us/api/views/98wc-x49t/rows.csv?accessType=DOWNLOAD"
+)
+
+
+```
+
+## Data Summary and Cleaning
+
+I am keeping occurrence date and time, and location information. 
+We are missing some data for the location classification column; I include these records in the analysis but note that missing values exist for that variable.
+
+
+```{r data_summary_and_cleaning, message=FALSE, warning=FALSE}
+
+# Look at the data
+#summary(shootings_data)
+#view(shootings_data)
+
+#Columns I want to keep are:
+#incident_key, occur_date, occur_time, boro, loc_of_occurrence, loc_of_occur_desc
+
+shootings_data <- shootings_data %>%
+  select(INCIDENT_KEY, OCCUR_DATE, OCCUR_TIME, BORO, LOC_OF_OCCUR_DESC, LOC_CLASSFCTN_DESC)
+
+# Rename the columns to be more descriptive
+shootings_data <- shootings_data %>%
+  rename(
+    incident_key = INCIDENT_KEY,
+    occur_date   = OCCUR_DATE,
+    occur_time   = OCCUR_TIME,
+    boro         = BORO,
+    loc_of_occurance = LOC_OF_OCCUR_DESC,
+    loc_classification = LOC_CLASSFCTN_DESC
+  )
+
+# Look for missing data
+missing_data <- sapply(shootings_data, function(x) sum(is.na(x)))
+#view(missing_data)
+#LOC_CLASSFCTN_DESC has 32 missing values, I will include them in the analysis but will note that they are missing.
+
+```
+
+## Data analysis
+
+In this section I explore when shootings are most likely to occur, looking at patterns by month, time of day, and day of week.
+
+```{r create_time_variables, message=FALSE, warning=FALSE}
+# Create helper columns for month, day of week, and time of day
+shootings_data <- shootings_data %>%
+  mutate(
+    occur_date = as.Date(occur_date, format = "%m/%d/%Y"),
+    hour = as.integer(substr(occur_time, 1, 2)),
+    month = as.Date(cut(occur_date, "month")),
+    day_of_week = factor(
+      weekdays(occur_date),
+      levels = c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
+    ),
+    time_of_day = case_when(
+      hour >= 5  & hour < 12 ~ "Morning (5am–11:59am)",
+      hour >= 12 & hour < 17 ~ "Afternoon (12pm–4:59pm)",
+      hour >= 17 & hour < 21 ~ "Evening (5pm–8:59pm)",
+      !is.na(hour)           ~ "Night (9pm–4:59am)",
+      TRUE                   ~ NA_character_
+    )
+  )
+
+# Approximate number of weeks covered by the data (used to express rates per week)
+weeks_in_data <- as.numeric(
+  difftime(max(shootings_data$occur_date, na.rm = TRUE),
+           min(shootings_data$occur_date, na.rm = TRUE),
+           units = "weeks")
+)
+```
+
+### When do shootings occur by month?
+
+Here I count the number of incidents in each calendar month.
+Out of the months in the data, February has the fewest shootings, and July has the most.
+NOTE: We only have data for January–September 2025, so we do not observe a full year or multiple years of incidents.
+
+```{r shootings_by_month, message=FALSE, warning=FALSE}
+shootings_by_month <- shootings_data %>%
+  count(month, name = "n")
+
+#view(shootings_by_month) # View the data to see the number of shootings by month
+
+ggplot(shootings_by_month, aes(x = month, y = n)) +
+  geom_col(fill = "steelblue") +
+  geom_text(
+    aes(label = paste(format(month, "%b"), n, sep = "\n")),
+    vjust = 1.1,
+    color = "white",
+    fontface = "bold",
+    size = 3
+  ) +
+  scale_x_date(date_labels = "%b %Y") +
+  labs(
+    title = "Number of shooting incidents by month",
+    x = "Month",
+    y = "Number of incidents"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### When do shootings occur by time of day?
+
+Next I group incidents into broad time-of-day buckets to understand when they are most common.
+By far, shootings are most common at night in this data, about 9 per week at night. 
+Generally, incidents were more frequent later in the day, with rates increasing from morning to night.
+Interestingly, afternoon and evening shootings occur similarly frequently, though with evening slightly more frequent.
+
+```{r shootings_by_time_of_day, message=FALSE, warning=FALSE}
+shootings_by_time_of_day <- shootings_data %>%
+  filter(!is.na(time_of_day)) %>%
+  count(time_of_day, name = "n") %>%
+  mutate(
+    time_of_day = factor(
+      time_of_day,
+      levels = c(
+        "Morning (5am–11:59am)",
+        "Afternoon (12pm–4:59pm)",
+        "Evening (5pm–8:59pm)",
+        "Night (9pm–4:59am)"
+      )
+    ),
+    incidents_per_week = n / weeks_in_data
+  ) %>%
+  arrange(time_of_day)
+
+shootings_by_time_of_day
+
+ggplot(shootings_by_time_of_day, aes(x = time_of_day, y = incidents_per_week)) +
+  geom_col(fill = "darkorange") +
+  geom_text(
+    aes(label = round(incidents_per_week, 1)),
+    vjust = -0.2,
+    size = 3
+  ) +
+  labs(
+    title = "Average number of shooting incidents per week by time of day",
+    x = "Time of day",
+    y = "Average number of incidents per week"
+  )
+```
+
+### How do shootings vary by day of week?
+
+I also look at how frequently shootings occur on each day of the week.
+It is unsurprising to me that incidents were most common on weekends, though it is notable that Sunday was higher than Saturday.
+In this sample, Thursday had the lowest rate of incidents. I wonder if that would hold true for a longer sample.
+
+```{r shootings_by_day_of_week, message=FALSE, warning=FALSE}
+shootings_by_day_of_week <- shootings_data %>%
+  count(day_of_week, name = "n") %>%
+  mutate(incidents_per_week = n / weeks_in_data) %>%
+  arrange(day_of_week)
+
+shootings_by_day_of_week
+
+ggplot(shootings_by_day_of_week, aes(x = day_of_week, y = incidents_per_week)) +
+  geom_col(fill = "seagreen") +
+  geom_text(
+    aes(label = round(incidents_per_week, 1)),
+    vjust = -0.2,
+    size = 3
+  ) +
+  labs(
+    title = "Average number of shooting incidents per week by day of week",
+    x = "Day of week",
+    y = "Average number of incidents per week"
+  )
+```
+
+## Modeling expected number of shootings
+
+In this section I fit a simple model to estimate the expected number of shooting incidents based on the day of the week and time of day.
+All model results should be interpreted as describing average patterns over the January–September 2025 period, not long-run forecasts.
+
+First, I aggregate the data to get the total number of incidents for each combination of day of week and time of day.
+
+```{r model_data_prep, message=FALSE, warning=FALSE}
+shootings_counts <- shootings_data %>%
+  filter(!is.na(day_of_week), !is.na(time_of_day)) %>%
+  count(day_of_week, time_of_day, name = "n") %>%
+  mutate(rate_per_week = n / weeks_in_data)
+
+#view(shootings_counts) # View the data to see the number of shootings by day of week and time of day
+```
+
+Next, I fit a Poisson regression model where the response is the count of incidents and the predictors are day of week and time of day.
+
+```{r fit_poisson_model, message=FALSE, warning=FALSE}
+poisson_model <- glm(
+  n ~ day_of_week + time_of_day,
+  data = shootings_counts,
+  family = poisson(link = "log")
+)
+
+summary(poisson_model)
+```
+
+The coefficients from this model describe how the expected number of shootings changes across days of the week and times of day, relative to the baseline categories (Sunday and afternoon, respectively). 
+
+The p-values don't necessarily tell us anything incredibly valuable. They primarily indicate that most days of the week (besides Saturday) differ significantly from Sunday. Likewise, most times of day differ significantly from the afternoon baseline, with evening appearing most similar to afternoon.
+These results are not suprising, earlier we saw that Sunday and Saturday looked relatively similar to each other, as did afternoon and evening.
+
+To visualize the model’s predictions, I plot the fitted average number of shootings per week for each combination of day of week and time of day.
+Unsurprisingly, the highest expected number of incidents occurs on Sunday nights, since both of those categories are the highest in the plots we made earlier.
+
+It is also notable how large the effect of night is on the expected number of incidents.
+Even the lowest expected value for night (Thursday night) is similar to the highest non‑night value.
+
+```{r model_predictions_plot, message=FALSE, warning=FALSE}
+prediction_grid <- shootings_counts %>%
+  select(day_of_week, time_of_day) %>%
+  distinct() %>%
+  arrange(day_of_week, time_of_day) %>%
+  mutate(
+    fitted_per_week = predict(poisson_model, newdata = ., type = "response") / weeks_in_data
+  )
+
+ggplot(prediction_grid, aes(x = time_of_day, y = fitted_per_week, fill = day_of_week)) +
+  geom_col(position = "dodge") +
+  geom_text(
+    aes(label = round(fitted_per_week, 1)),
+    position = position_dodge(width = 0.9),
+    vjust = -0.2,
+    size = 2.8
+  ) +
+  labs(
+    title = "Predicted average number of shooting incidents per week",
+    x = "Time of day",
+    y = "Predicted number of incidents per week",
+    fill = "Day of week"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Potential sources of bias
+
+There are several ways in which this dataset and analysis could be biased, and it is important to keep these in mind when interpreting the results.
+
+1) **Limited time frame**: The data cover only January–September 2025. Any short‑term events (policy changes, local conflicts, unusual weather, or other shocks) during this period can have a larger influence than they would over many years of data. Seasonal patterns may also be incomplete because we do not observe the full year.
+
+2) **Reporting and recording bias**: These incidents are drawn from NYPD records, so the data only include shootings that are reported to or recorded by the police. Underreporting, differences in how incidents are classified, or changes in reporting practices over time could all bias the observed patterns.
+
+3) **Definition of a “shooting incident”**: The criteria the NYPD uses to define and include a shooting incident may exclude some borderline cases or include others, which can influence counts across locations, times, or neighborhoods in ways we cannot fully observe from this dataset alone.
+
+4) **No adjustment for population size**: The analysis focuses on raw counts and per‑week averages of incidents, not on a per-person basis. Differences in population size could affect the analysis. This is somewhat mitigated by the fact that we are looking at the entire city instead of doing a bourough or neighborhood level analysis. But could still affect time-frames (what if more people are in NYC during a specific month or day of the week?)
+
+5) **My choices**: I made several choices in how to structure the analysis, which if made differently could lead to different conclusions. For example, how I defined time of day buckets could be different, and a differnt definition of evening and night could affect the analysis.
+Other choices include which metrics I included and excluded in my analysis (for example I didn't use any location data).
+
+Overall, these limitations mean that the results should be interpreted as describing patterns in recorded NYPD shooting incidents for this specific period, rather than as definitive statements about all shootings or their underlying causes.
+
+
